@@ -586,11 +586,18 @@ pub(crate) struct ConfigCronCurrentArgs {
     pub command: ConfigCronCurrentCommand,
 }
 
+#[derive(Args, Debug, Clone)]
+pub(crate) struct ConfigCronCurrentWriteArgs {
+    /// Inline JSON payload. Useful on Windows where cmd.exe has no heredoc syntax.
+    #[arg(long, value_name = "JSON")]
+    pub json: Option<String>,
+}
+
 #[derive(Subcommand, Debug, Clone)]
 pub(crate) enum ConfigCronCurrentCommand {
     List,
-    Create,
-    Update,
+    Create(ConfigCronCurrentWriteArgs),
+    Update(ConfigCronCurrentWriteArgs),
 }
 
 #[derive(Args, Debug, Clone)]

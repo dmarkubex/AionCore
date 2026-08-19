@@ -108,6 +108,11 @@ pub struct CreateTerminalParams {
     pub output_byte_limit: Option<u64>,
 }
 
+#[cfg(any(windows, test))]
+fn windows_utf8_shell_command(command: &str) -> String {
+    format!("chcp 65001 >NUL & {command}")
+}
+
 impl TerminalRegistry {
     /// Spawn the command and register a terminal for it.
     pub async fn create(&self, params: CreateTerminalParams) -> Result<String, String> {
@@ -128,7 +133,7 @@ impl TerminalRegistry {
             #[cfg(windows)]
             {
                 let mut b = aionui_runtime::Builder::new("cmd");
-                b.arg("/C").arg(&params.command);
+                b.arg("/D").arg("/C").arg(windows_utf8_shell_command(&params.command));
                 b
             }
         } else {
@@ -464,6 +469,23 @@ mod tests {
         assert_eq!(exit.exit_code, Some(0));
         let snap = wait_for_output_contains(&reg, &id, "shell_interpreted").await;
         assert!(snap.output.contains("shell_interpreted"), "got: {}", snap.output);
+    }
+
+    #[test]
+    fn windows_shell_switches_to_utf8_before_running_the_user_command() {
+        assert_eq!(windows_utf8_shell_command("echo 你好"), "chcp 65001 >NUL & echo 你好");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn bare_windows_command_streams_chinese_output_as_utf8() {
+        let reg = TerminalRegistry::new("conv-windows-utf8", None);
+        let id = reg.create(params("echo 你好", &[])).await.unwrap();
+
+        let exit = reg.wait_for_exit(&id).await.unwrap();
+        assert_eq!(exit.exit_code, Some(0));
+        let snap = wait_for_output_contains(&reg, &id, "你好").await;
+        assert!(snap.output.contains("你好"), "got: {}", snap.output);
     }
 
     #[tokio::test]

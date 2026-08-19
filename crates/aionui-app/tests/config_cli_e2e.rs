@@ -108,6 +108,26 @@ async fn fake_conversation_cron_list(
     }))
 }
 
+async fn fake_conversation_cron_create(
+    State(capture): State<SharedCapture>,
+    headers: HeaderMap,
+    axum::Json(payload): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
+    *capture.lock().unwrap() = Some(Capture {
+        conversation_id: header(&headers, "x-aionui-conversation-id"),
+        user_id: header(&headers, "x-aionui-user-id"),
+        payload: Some(payload),
+        ..Capture::default()
+    });
+    axum::Json(json!({
+        "success": true,
+        "data": {
+            "job_id": "cron-inline-1",
+            "message": "Created cron job"
+        }
+    }))
+}
+
 async fn fake_conversation_cron_update(
     State(capture): State<SharedCapture>,
     Path(job_id): Path<String>,
@@ -368,6 +388,10 @@ async fn spawn_config_probe_server(capture: SharedCapture) -> (String, tokio::ta
         .route("/api/skills/assistant-rule/read", post(fake_assistant_rule_read))
         .route("/api/skills/assistant-rule/write", post(fake_assistant_rule_write))
         .route("/api/internal/conversation-cron/list", get(fake_conversation_cron_list))
+        .route(
+            "/api/internal/conversation-cron/create",
+            axum::routing::post(fake_conversation_cron_create),
+        )
         .route(
             "/api/internal/conversation-cron/jobs/{job_id}",
             put(fake_conversation_cron_update),
@@ -1058,6 +1082,51 @@ async fn config_cron_current_update_reads_job_id_from_stdin_and_sends_runtime_he
 }
 
 #[tokio::test]
+async fn config_cron_current_create_accepts_inline_json_with_chinese_text() {
+    let capture = Arc::new(Mutex::new(None));
+    let (base_url, handle) = spawn_config_probe_server(capture.clone()).await;
+    let payload = json!({
+        "name": "每日17:30钉钉日报生成",
+        "schedule": "30 17 * * *",
+        "schedule_description": "每天17:30",
+        "message": "执行玲玲日报技能并生成当天钉钉日报。"
+    });
+
+    let output = config_command()
+        .args([
+            "cron",
+            "current",
+            "create",
+            "--json",
+            &serde_json::to_string(&payload).unwrap(),
+        ])
+        .env("AIONUI_BASE_URL", &base_url)
+        .env("AIONUI_CONVERSATION_ID", "conv-cron")
+        .env("AIONUI_USER_ID", "user-cron")
+        .output()
+        .await
+        .unwrap();
+
+    handle.abort();
+    assert!(
+        output.status.success(),
+        "cron current create failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let captured = capture
+        .lock()
+        .unwrap()
+        .take()
+        .expect("server should receive cron create");
+    assert_eq!(captured.conversation_id, "conv-cron");
+    assert_eq!(captured.user_id, "user-cron");
+    assert_eq!(captured.payload, Some(payload));
+    let stdout: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(stdout["success"], true);
+}
+
+#[tokio::test]
 async fn config_context_fails_with_stable_error_when_conversation_env_missing() {
     let capture = Arc::new(Mutex::new(None));
     let (base_url, handle) = spawn_config_probe_server(capture).await;
@@ -1113,5 +1182,7 @@ fn builtin_config_skills_use_config_cli_not_python_or_cron_helper() {
 
     assert!(!cron.contains("cron-helper"));
     assert!(cron.contains("\"$AIONUI_HELPER_BIN\" config cron current list"));
+    assert!(cron.contains("config cron current create --json"));
+    assert!(cron.contains("do not use here-strings or temporary files"));
     assert!(cron.contains("\"job_id\""));
 }

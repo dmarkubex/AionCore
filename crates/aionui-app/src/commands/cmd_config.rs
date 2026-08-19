@@ -936,25 +936,26 @@ async fn run_cron_current(client: &reqwest::Client, args: ConfigCronCurrentArgs)
             .await?;
             print_envelope(data, meta(None), command)
         }
-        ConfigCronCurrentCommand::Create => {
-            run_payload_request_with_collection_readback(
+        ConfigCronCurrentCommand::Create(args) => {
+            run_payload_request_with_collection_readback_input(
                 client,
                 "config cron current create",
                 Method::POST,
                 "/api/internal/conversation-cron/create",
                 "/api/internal/conversation-cron/list",
                 false,
+                args.json.as_deref(),
             )
             .await
         }
-        ConfigCronCurrentCommand::Update => run_cron_current_update(client).await,
+        ConfigCronCurrentCommand::Update(args) => run_cron_current_update(client, args.json.as_deref()).await,
     }
 }
 
-async fn run_cron_current_update(client: &reqwest::Client) -> Result<(), ConfigError> {
+async fn run_cron_current_update(client: &reqwest::Client, inline_json: Option<&str>) -> Result<(), ConfigError> {
     let command = "config cron current update";
     let env = ConfigEnv::from_env(command)?;
-    let mut payload = read_stdin_payload(command)?;
+    let mut payload = read_payload(command, inline_json)?;
     let mut selectors = SelectorMeta::default();
     resolve_top_level_selectors(client, &env, command, &mut payload, &mut selectors).await?;
     let job_id = take_required_string_field(&mut payload, "job_id", command)?;
@@ -1034,8 +1035,29 @@ async fn run_payload_request_with_collection_readback(
     collection_path: &'static str,
     redact_output: bool,
 ) -> Result<(), ConfigError> {
+    run_payload_request_with_collection_readback_input(
+        client,
+        command,
+        method,
+        path,
+        collection_path,
+        redact_output,
+        None,
+    )
+    .await
+}
+
+async fn run_payload_request_with_collection_readback_input(
+    client: &reqwest::Client,
+    command: &'static str,
+    method: Method,
+    path: &'static str,
+    collection_path: &'static str,
+    redact_output: bool,
+    inline_json: Option<&str>,
+) -> Result<(), ConfigError> {
     let env = ConfigEnv::from_env(command)?;
-    let mut payload = read_stdin_payload(command)?;
+    let mut payload = read_payload(command, inline_json)?;
     let mut selectors = SelectorMeta::default();
     resolve_top_level_selectors(client, &env, command, &mut payload, &mut selectors).await?;
     let before = request_json(client, &env, Method::GET, collection_path, None, command).await?;
@@ -1512,21 +1534,25 @@ fn read_stdin_payload(command: &str) -> Result<Value, ConfigError> {
         )
         .field("field", "stdin")
     })?;
-    if raw.trim().is_empty() {
-        return Err(ConfigError::new(
-            ConfigErrorCode::PayloadMissing,
-            command,
-            "JSON payload is required on stdin",
-        )
-        .field("field", "stdin"));
+    parse_payload(command, &raw, "stdin")
+}
+
+fn read_payload(command: &str, inline_json: Option<&str>) -> Result<Value, ConfigError> {
+    match inline_json {
+        Some(raw) => parse_payload(command, raw, "json"),
+        None => read_stdin_payload(command),
     }
-    serde_json::from_str(&raw).map_err(|_| {
-        ConfigError::new(
-            ConfigErrorCode::PayloadInvalid,
-            command,
-            "invalid JSON payload on stdin",
-        )
-        .field("field", "stdin")
+}
+
+fn parse_payload(command: &str, raw: &str, field: &'static str) -> Result<Value, ConfigError> {
+    if raw.trim().is_empty() {
+        return Err(
+            ConfigError::new(ConfigErrorCode::PayloadMissing, command, "JSON payload is required")
+                .field("field", field),
+        );
+    }
+    serde_json::from_str(raw).map_err(|_| {
+        ConfigError::new(ConfigErrorCode::PayloadInvalid, command, "invalid JSON payload").field("field", field)
     })
 }
 
