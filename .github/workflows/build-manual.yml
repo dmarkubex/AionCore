@@ -135,6 +135,13 @@ jobs:
             cargo build --release --target ${{ matrix.target }} -p aionui-app
           fi
 
+      - name: Test Windows UTF-8 terminal output
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags || '' }}
+        run: cargo test --target ${{ matrix.target }} -p aionui-ai-agent bare_windows_command_streams_chinese_output_as_utf8
+
       - name: Verify Linux ARM64 GLIBC baseline
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         shell: bash
